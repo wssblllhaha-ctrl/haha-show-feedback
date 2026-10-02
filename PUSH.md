@@ -84,14 +84,28 @@ grep -rn "要改的那句话" index.html portfolio.json app.js
 2. 勾 **`repo`** 权限，有效期按需（30 天足够）
 3. 生成后**只复制一次**，然后：
 
+**在 cmd 里（最省事，推荐）：**
+
+```
+cd /d "C:\Users\25646\Desktop\project\01-应用项目\haha-show-feedback"
+push.bat 粘贴你的token
+```
+
+**在 Git Bash 里：**
+
 ```bash
 cd "C:/Users/25646/Desktop/project/01-应用项目/haha-show-feedback"
 GITHUB_TOKEN=粘贴你的token node tools/push-via-api.mjs
 ```
 
+> **注意 `VAR=值 命令` 只在 bash 里有效。** 在 cmd 里会报
+> `'GITHUB_TOKEN' is not recognized as an internal or external command` ——
+> cmd 没有这种前置赋值语法，改用上面的 `push.bat`。
+
 脚本会把本地文件分 3 批提交到 `main`。跑完去仓库页刷新就能看到。
 
 **token 不落盘、不进仓库、不写进任何文件。** 用完可以在 GitHub 上删掉那个 token。
+**不要把 token 贴进聊天或截图** —— 一旦贴出就等于公开，要立刻去 GitHub 删掉重建。
 
 ### 之后想更新内容
 
