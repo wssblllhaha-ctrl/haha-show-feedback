@@ -1,61 +1,113 @@
-# 往这个仓库推东西
+# 改站点文字 & 推送反馈仓库
 
-这个目录是 `haha-show-feedback` 仓库的工作副本，与站点仓库（`portfolio-site`）**完全分离** —— 站点怎么改都不会影响这里。
+## 一、改站点文字
 
-## 网络前提（本机必读）
+**核心规矩：改源码，不改编译产物。** `outputs/portfolio-site/` 是构建出来的，直接改它下次构建就被覆盖。
 
-本机 DNS 会把 `github.com` 解析到一个不通的 IP。直接 `git push` 会卡住或超时，两个办法：
+文字分两处住着：
 
-### 办法一：给 git 单独配一个好用的 IP（推荐）
+### A. 硬编码在 `portfolio-site/index.html` 里的
 
-```bash
-# 先确认哪个 IP 通（下面两个实测可用）
-for ip in 20.27.177.113 20.200.245.247; do
-  curl -s -o /dev/null -w "$ip -> %{http_code}\n" --noproxy '*' \
-    --resolve github.com:443:$ip -m 8 https://github.com/
-done
+| 你想改的 | 在哪 |
+| --- | --- |
+| 顶栏小字 `A COLLECTION OF CURIOSITY` | 第 50 行 `<span class="brand-sub">` |
+| 大标题「把好奇心，做成作品。」 | 第 58 行 `<h1 id="hero-title">` |
+| 项目区标题「一些想法，一些实现.」 | 第 72 行 |
+| 项目区副标题「为真实的小问题…」 | 第 72 行 `<p>` |
+| 空状态文案 | 第 76 行 `id="empty-state"` |
+| 「在动手里，找到答案。」及各条原则 | 第 79 行 `about-section` |
+| 「知识不止收藏，也值得分享。」 | 第 80 行 `learning-section` |
+| 页脚「把好奇留在心里，把作品留在这里。」 | 第 82 行 `<footer>` |
+| 浏览器标签页标题 | 第 12 行 `<title>` |
+
+**删掉某行小字**，就是删对应的那个元素。例如删顶栏小字：
+
+```html
+<!-- 改前 -->
+<span data-profile-name>HA哈</span><span class="brand-sub">A COLLECTION OF CURIOSITY</span>
+<!-- 改后 -->
+<span data-profile-name>HA哈</span>
 ```
 
-可用 IP 写进 hosts，或者用 `--resolve` 的等价做法（git 不支持 `--resolve`，所以走 hosts 最省事）：
+注意它和名字挤在同一个 `<span>` 里（外层只有一个 `<span>` 包着），删的时候只删 `class="brand-sub"` 那一节，别把 `data-profile-name` 一起带走。
+
+**改完按顺序跑：**
+
+```bash
+cd "C:/Users/25646/Desktop/project/01-应用项目/portfolio-site"
+node build.mjs      # 重新构建到 outputs/portfolio-site/
+node preview.mjs    # 本地开预览，先看对不对
+node deploy.mjs     # 确认没问题再发布
+```
+
+`preview.mjs` 和 `deploy.mjs` 都别跳。`deploy.mjs` 末尾带线上自检，跑完会实际请求 haha.show 确认生效 —— 这条别删（Cloudflare 会「报 success 但一个资产都没注册」，只有真实请求能暴露）。
+
+### B. 来自 `portfolio.json` 的（项目标题、描述、标签）
+
+项目卡片上的文字不在 `index.html`，在 **`portfolio.json`**：
+
+```bash
+grep -n "要改的词" portfolio.json
+```
+
+改完同样 `node build.mjs`。
+
+### C. 怎么快速定位
+
+```bash
+cd "C:/Users/25646/Desktop/project/01-应用项目/portfolio-site"
+grep -rn "要改的那句话" index.html portfolio.json app.js
+```
+
+搜到之后**只改 `portfolio-site/` 目录下的文件**（`index.html` / `portfolio.json` / `app.js`），不要动 `outputs/`。
+
+---
+
+## 二、推送 haha-show-feedback
+
+### 本机网络的坑（为什么不能用普通 git push）
+
+| 通道 | 结果 |
+| --- | --- |
+| 直连 `github.com`（DNS `20.205.243.166`） | 超时不通 |
+| 直连可用 IP（`20.27.177.113` / `20.200.245.247`） | 网页 200，但 **git 端点 curl 不通** |
+| 走系统代理 `http://127.0.0.1:58358` | 网页 200，但 **git 的 CONNECT 隧道被拒 502** |
+| 走系统代理访问 **REST API** | **200 可用** ← 走这条 |
+
+结论：本机 git 协议不通，但 HTTPS REST API 通。所以用 `tools/push-via-api.mjs` 走 API 提交。
+
+### 用法
+
+需要你的 GitHub Personal Access Token：
+
+1. 打开 https://github.com/settings/tokens → **Generate new token (classic)**
+2. 勾 **`repo`** 权限，有效期按需（30 天足够）
+3. 生成后**只复制一次**，然后：
+
+```bash
+cd "C:/Users/25646/Desktop/project/01-应用项目/haha-show-feedback"
+GITHUB_TOKEN=粘贴你的token node tools/push-via-api.mjs
+```
+
+脚本会把本地文件分 3 批提交到 `main`。跑完去仓库页刷新就能看到。
+
+**token 不落盘、不进仓库、不写进任何文件。** 用完可以在 GitHub 上删掉那个 token。
+
+### 之后想更新内容
+
+改完本地文件，再跑一次同一个命令。脚本每次都新建 commit，不覆盖历史。
+
+### 如果以后想用普通 git push
+
+要让 git 也走通，只有一条路：**改 hosts 把 `github.com` 指到可用 IP**（需要管理员权限）。
 
 ```
 # C:\Windows\System32\drivers\etc\hosts
 20.27.177.113 github.com
-20.27.177.113 api.github.com
 ```
 
-改 hosts 需要管理员权限，改完 `ipconfig /flushdns`。
-
-### 办法二：只走网页端
-
-文件都在本地，直接把内容复制到 GitHub 网页端新建文件也一样。改 README 这种小事用网页端更快。
-
-## 推送
+改完 `ipconfig /flushdns`。但即便解析对了，git 的 CONNECT 走代理仍会 502，所以要配合 `git config --global http.proxy ""` 清掉代理再直连。可用 IP 会变，不通了就重新探测：
 
 ```bash
-cd "C:/Users/25646/Desktop/project/01-应用项目/haha-show-feedback"
-git add .
-git commit -m "写清楚这次改了什么"
-git push
+nslookup github.com 223.5.5.5
 ```
-
-首次推送要认证。GitHub 从 2021 年起不接受账号密码，要用 **Personal Access Token**：
-
-1. https://github.com/settings/tokens → Generate new token (classic)
-2. 勾 `repo` 权限，有效期按需
-3. 推送时 username 填 GitHub 用户名，password 填 token
-
-token 不要写进任何文件，也不要提交进仓库。
-
-## Issue 模板的位置
-
-```
-.github/ISSUE_TEMPLATE/
-  bug_report.yml     # Bug 报告表单
-  suggestion.yml     # 建议表单
-  config.yml         # 关掉「空白 issue 之外的联系链接」等杂项
-```
-
-改完 push 之后，`/issues/new/choose` 页面就会显示两个表单入口。
-
-`issues/` 目录里放的是**长文说明**（比如那份深色模式的已知问题）。GitHub 的 issue 正文不适合放太长的排查记录，所以长文写在这里，issue 里放摘要 + 链接回来。
