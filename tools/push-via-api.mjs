@@ -1,25 +1,28 @@
 // 用 GitHub Contents API 把本地文件推到 haha-show-feedback 仓库。
 //
-// 存在的意义：本机 git 的 CONNECT 隧道被代理拒（502），网页却走得通，
-// 所以绕过 git push，直接用 HTTPS REST API 提交。
+// 为什么不禁用 git push：本机 git 的 CONNECT 隧道被代理拒（502），网页却走得通，
+// 所以绕过 git push，直接打 HTTPS REST API。
+//
+// 为什么不用 curl 子进程：`execFile("curl", ..., { input })` 在本机（Windows + Git Bash）
+// 会**挂死**——stdin 管道不通，进程直到超时被杀，一行输出都没有。
+// 改用 Node 原生的 http 模块直接对代理发 CONNECT + TLS 请求，行为可预测。
 //
 // 用法：
-//   GITHUB_TOKEN=xxx node push-via-api.mjs
+//   GITHUB_TOKEN=xxx node tools/push-via-api.mjs
 //
 // token 只从环境变量读，不落盘、不提交。
 import fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const run = promisify(execFile);
+import http from "node:http";
+import tls from "node:tls";
 
 const OWNER = "wssblllhaha-ctrl";
 const REPO = "haha-show-feedback";
-const PROXY = "http://127.0.0.1:58358";
+const PROXY_HOST = "127.0.0.1";
+const PROXY_PORT = 58358;
+const API_HOST = "api.github.com";
 const TOKEN = process.env.GITHUB_TOKEN;
 
-// 每次运行读全部待推文件。改动过的会更新，新增的会创建。
 const FILES = [
   "README.md",
   "PUSH.md",
@@ -34,34 +37,79 @@ const FILES = [
 
 const root = process.cwd();
 
-// Node 的 fetch 在本机被 DNS 黑洞 + 代理 CONNECT(502) 双重挡死，
-// 所以把请求交给 curl 走代理。curl 是本机唯一稳定通到 api.github.com 的通道。
-async function api(method, url, body) {
-  const args = ["-s", "-x", PROXY, "-X", method, "-m", "30", "-w", "\n__CODE__%{http_code}"];
-  args.push("-H", `Authorization: Bearer ${TOKEN}`);
-  args.push("-H", "Accept: application/vnd.github+json");
-  args.push("-H", "X-GitHub-Api-Version: 2022-11-28");
-  args.push("-H", "User-Agent: haha-show-feedback-push");
-  if (body) {
-    args.push("-H", "Content-Type: application/json");
-    args.push("--data-binary", "@-");
-  }
-  args.push(url);
-  const options = { maxBuffer: 32 * 1024 * 1024 };
-  if (body) options.input = JSON.stringify(body);
-  const { stdout } = await run("curl", args, options);
-  const marker = stdout.lastIndexOf("\n__CODE__");
-  const text = stdout.slice(0, marker < 0 ? stdout.length : marker);
-  const code = marker < 0 ? 0 : Number(stdout.slice(marker + 9));
-  let json = null;
-  try { json = JSON.parse(text); } catch {}
-  return { code, json, text };
+// 通过代理发一个 HTTPS 请求。做法：向代理发 CONNECT 建隧道，再在隧道上做 TLS。
+function request(method, urlPath, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? Buffer.from(JSON.stringify(body), "utf8") : null;
+
+    const connectReq = http.request({
+      host: PROXY_HOST,
+      port: PROXY_PORT,
+      method: "CONNECT",
+      path: `${API_HOST}:443`,
+      headers: { Host: `${API_HOST}:443` },
+      timeout: 30000,
+    });
+
+    connectReq.on("connect", (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        reject(new Error(`代理 CONNECT 失败：HTTP ${res.statusCode}`));
+        return;
+      }
+      const secure = tls.connect({
+        socket,
+        servername: API_HOST,
+        rejectUnauthorized: true,
+      });
+      secure.on("secureConnect", () => {
+        const headers = [
+          `${method} ${urlPath} HTTP/1.1`,
+          `Host: ${API_HOST}`,
+          `Authorization: Bearer ${TOKEN}`,
+          "Accept: application/vnd.github+json",
+          "X-GitHub-Api-Version: 2022-11-28",
+          "User-Agent: haha-show-feedback-push",
+          "Connection: close",
+        ];
+        if (payload) {
+          headers.push("Content-Type: application/json");
+          headers.push(`Content-Length: ${payload.length}`);
+        }
+        secure.write(headers.join("\r\n") + "\r\n\r\n");
+        if (payload) secure.write(payload);
+      });
+      let raw = Buffer.alloc(0);
+      secure.on("data", (chunk) => { raw = Buffer.concat([raw, chunk]); });
+      secure.on("end", () => {
+        const text = raw.toString("utf8");
+        const split = text.indexOf("\r\n\r\n");
+        const head = text.slice(0, split);
+        let bodyText = text.slice(split + 4);
+        const status = Number((head.match(/^HTTP\/1\.\d (\d+)/) || [])[1] || 0);
+        // 可能被分块编码，简单剥掉分块长度前缀
+        if (/transfer-encoding:\s*chunked/i.test(head)) {
+          bodyText = bodyText
+            .split("\r\n")
+            .filter((line) => line && !/^[0-9a-f]+$/i.test(line))
+            .join("\n");
+        }
+        let json = null;
+        try { json = JSON.parse(bodyText); } catch {}
+        resolve({ status, text: bodyText, json });
+      });
+      secure.on("error", reject);
+    });
+
+    connectReq.on("timeout", () => { connectReq.destroy(new Error("连接代理超时")); });
+    connectReq.on("error", reject);
+    connectReq.end();
+  });
 }
 
-// 取某个路径当前的 sha（存在才返回）。Contents API 更新文件必须带 sha。
 async function currentSha(relative) {
-  const res = await api("GET", `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURI(relative)}?ref=main`);
-  if (res.code === 200 && res.json && res.json.sha) return res.json.sha;
+  const res = await request("GET", `/repos/${OWNER}/${REPO}/contents/${encodeURI(relative)}?ref=main`);
+  if (res.status === 200 && res.json?.sha) return res.json.sha;
   return null;
 }
 
@@ -71,9 +119,9 @@ async function main() {
     process.exit(2);
   }
 
-  const check = await api("GET", `https://api.github.com/repos/${OWNER}/${REPO}`);
-  if (check.code !== 200) {
-    console.error(`仓库读不到（HTTP ${check.code}）: ${check.text.slice(0, 200)}`);
+  const check = await request("GET", `/repos/${OWNER}/${REPO}`);
+  if (check.status !== 200) {
+    console.error(`仓库读不到（HTTP ${check.status}）: ${check.text.slice(0, 200)}`);
     console.error("token 可能已失效、被删，或没有 repo 权限。");
     process.exit(1);
   }
@@ -97,9 +145,9 @@ async function main() {
     };
     if (sha) body.sha = sha;
 
-    const res = await api("PUT", `https://api.github.com/repos/${OWNER}/${REPO}/contents/${encodeURI(relative)}`, body);
-    if (res.code !== 200 && res.code !== 201) {
-      console.error(`✗ ${relative} 失败（HTTP ${res.code}）: ${res.text.slice(0, 300)}`);
+    const res = await request("PUT", `/repos/${OWNER}/${REPO}/contents/${encodeURI(relative)}`, body);
+    if (res.status !== 200 && res.status !== 201) {
+      console.error(`✗ ${relative} 失败（HTTP ${res.status}）: ${res.text.slice(0, 300)}`);
       process.exit(1);
     }
     ok += 1;
@@ -109,10 +157,9 @@ async function main() {
   console.log(`\n完成：${ok} 个文件已提交到 main。`);
 
   // 自检：API 说成功不等于真的生效，必须回到能观测的那一层确认。
-  // （这条是拿两次 Cloudflare 的假 success 换来的教训，别再省。）
-  const verify = await api("GET", `https://api.github.com/repos/${OWNER}/${REPO}/contents/`);
-  if (verify.code !== 200 || !Array.isArray(verify.json)) {
-    console.error(`自检失败：提交后仍读不到文件（HTTP ${verify.code}）。`);
+  const verify = await request("GET", `/repos/${OWNER}/${REPO}/contents/`);
+  if (verify.status !== 200 || !Array.isArray(verify.json)) {
+    console.error(`自检失败：提交后仍读不到文件（HTTP ${verify.status}）。`);
     process.exit(1);
   }
   const remote = new Set(verify.json.map((entry) => entry.name));
@@ -126,6 +173,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(error);
+  console.error("脚本异常：", error.message || error);
   process.exit(1);
 });
