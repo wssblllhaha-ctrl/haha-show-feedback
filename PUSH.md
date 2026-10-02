@@ -88,8 +88,14 @@ grep -rn "要改的那句话" index.html portfolio.json app.js
 
 ```
 cd /d "C:\Users\25646\Desktop\project\01-应用项目\haha-show-feedback"
-push.bat 粘贴你的token
+push.bat
 ```
+
+`push.bat` 会**提示你粘贴 token**（不在命令行里出现，也不会进历史记录），跑完停在
+`Press any key to close this window ...` —— 所以**双击运行也行**，不会闪退。
+
+> **为什么之前双击会"闪一下"就没了**：脚本跑完进程就退出，cmd 窗口跟着关闭，
+> 输出全丢。现在结尾有 `pause` 兜底，无论成功失败都留得住。
 
 **在 Git Bash 里：**
 
