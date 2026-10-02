@@ -1,0 +1,37 @@
+name: 建议
+description: 想加什么内容、哪里不好看、文案想改
+title: "[建议] "
+labels: ["suggestion"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        建议也可以提 bug 表，这一份只是少了设备信息，填起来快一点。
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: 类型
+      options:
+        - 加新内容（文章 / 项目 / 带读）
+        - 改现有内容（文案、标题、错别字）
+        - 视觉与交互（颜色、排版、动画）
+        - 别的
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 想说什么
+      description: 提建议不需要论证得很完整，说清想要什么就行
+    validations:
+      required: true
+
+  - type: input
+    id: where
+    attributes:
+      label: 相关页面
+      placeholder: https://haha.show/
+    validations:
+      required: false
